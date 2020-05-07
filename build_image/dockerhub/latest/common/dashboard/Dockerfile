@@ -9,10 +9,9 @@ LABEL maintainer="github.com/hyperledger/cello"
 
 WORKDIR /usr/src/app/
 USER root
-COPY --from=downloader /tmp/cello-master/src/dashboard/package.json ./
-RUN yarn
-COPY --from=downloader /tmp/cello-master/src/dashboard ./
-RUN npm run build
+RUN mkdir -p /usr/src/app && cd /usr/src/app
+COPY --from=downloader /tmp/cello-master/src/dashboard /usr/src/app
+RUN yarn --network-timeout 600000 && yarn run build
 
 FROM nginx:1.15.12
 
