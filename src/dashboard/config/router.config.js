@@ -29,7 +29,7 @@ export default [
             path: '/overview',
             name: 'overview',
             icon: 'eye',
-            component: './Overview/Overview',
+            component: './Overview/index',
           },
           {
             path: '/operator',
@@ -68,7 +68,7 @@ export default [
               {
                 path: '/operator/node',
                 name: 'node',
-                component: './Operator/Node/Node',
+                component: './Operator/Node/index',
               },
               {
                 path: '/operator/node/new',
@@ -99,7 +99,7 @@ export default [
               },
             ],
           },
-        ]
+        ],
       },
       {
         component: '404',
