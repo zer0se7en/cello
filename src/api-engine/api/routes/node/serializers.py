@@ -42,8 +42,6 @@ class NodeQuery(PageQuerySerializer, serializers.ModelSerializer):
             "per_page",
             "type",
             "name",
-            "network_type",
-            "network_version",
             "agent_id",
         )
         extra_kwargs = {"type": {"required": False}}
@@ -51,6 +49,10 @@ class NodeQuery(PageQuerySerializer, serializers.ModelSerializer):
 
 class NodeIDSerializer(serializers.Serializer):
     id = serializers.UUIDField(help_text="ID of node")
+
+
+class NodeCIDSerializer(serializers.Serializer):
+    id = serializers.CharField(help_text="containter ID of node")
 
 
 class FabricCASerializer(serializers.ModelSerializer):
@@ -160,14 +162,11 @@ class FabricPeerSerializer(serializers.ModelSerializer):
 
 
 class NodeInListSerializer(NodeIDSerializer, serializers.ModelSerializer):
-    agent_id = serializers.UUIDField(
-        help_text="Agent ID", required=False, allow_null=True
-    )
+    # agent_id = serializers.UUIDField(
+    #     help_text="Agent ID", required=False, allow_null=True
+    # )
     network_id = serializers.UUIDField(
         help_text="Network ID", required=False, allow_null=True
-    )
-    ca = FabricCASerializer(
-        help_text="CA configuration for node", required=False, allow_null=True
     )
 
     class Meta:
@@ -176,18 +175,17 @@ class NodeInListSerializer(NodeIDSerializer, serializers.ModelSerializer):
             "id",
             "type",
             "name",
-            "network_type",
-            "network_version",
+            "urls",
             "created_at",
-            "agent_id",
-            "network_id",
             "status",
-            "ca",
+            "network_id",
+            "org",
+            "cid",
         )
         extra_kwargs = {
             "id": {"required": True, "read_only": False},
             "created_at": {"required": True, "read_only": False},
-            "ca": {"required": False, "allow_null": True},
+            #"ca": {"required": False, "allow_null": True},
         }
 
 
@@ -238,69 +236,56 @@ class NodeInfoSerializer(NodeIDSerializer, serializers.ModelSerializer):
 
 
 class NodeCreateBody(serializers.ModelSerializer):
-    agent_type = serializers.ChoiceField(
-        help_text="Agent type",
-        choices=HostType.to_choices(True),
-        required=False,
-    )
-    ca = FabricCASerializer(
-        help_text="CA configuration for node", required=False
-    )
-    peer = FabricPeerSerializer(
-        help_text="Peer configuration for node", required=False
-    )
+    organization = serializers.UUIDField(help_text="ID of organization")
 
     class Meta:
         model = Node
         fields = (
-            "network_type",
-            "network_version",
+            "name",
+            "urls",
             "type",
-            "agent_type",
-            "agent",
-            "ca",
-            "peer",
+            "organization",
         )
         extra_kwargs = {
-            "network_type": {"required": True},
-            "network_version": {"required": True},
+            "name": {"required": True},
+            "urls": {"required": True},
             "type": {"required": True},
         }
 
     def validate(self, attrs):
-        network_type = attrs.get("network_type")
-        node_type = attrs.get("type")
-        network_version = attrs.get("network_version")
-        agent_type = attrs.get("agent_type")
-        agent = attrs.get("agent")
-        ca = attrs.get("ca")
-        peer = attrs.get("peer")
-        if network_type == NetworkType.Fabric.value:
-            if network_version not in FabricVersions.values():
-                raise serializers.ValidationError("Not valid fabric version")
-            if node_type not in FabricNodeType.names():
-                raise serializers.ValidationError(
-                    "Not valid node type for %s" % network_type
-                )
-            if node_type == FabricNodeType.Ca.name.lower() and ca is None:
-                raise serializers.ValidationError(
-                    "Please input ca configuration for ca node"
-                )
-            elif (
-                node_type == FabricNodeType.Peer.name.lower() and peer is None
-            ):
-                raise serializers.ValidationError(
-                    "Please input peer configuration for peer node"
-                )
-
-        if agent_type is None and agent is None:
-            raise serializers.ValidationError("Please set agent_type or agent")
-
-        if agent_type and agent:
-            if agent_type != agent.type:
-                raise serializers.ValidationError(
-                    "agent type not equal to agent"
-                )
+        # network_type = attrs.get("network_type")
+        # node_type = attrs.get("type")
+        # network_version = attrs.get("network_version")
+        # agent_type = attrs.get("agent_type")
+        # agent = attrs.get("agent")
+        # ca = attrs.get("ca")
+        # peer = attrs.get("peer")
+        # if network_type == NetworkType.Fabric.value:
+        #     if network_version not in FabricVersions.values():
+        #         raise serializers.ValidationError("Not valid fabric version")
+        #     if node_type not in FabricNodeType.names():
+        #         raise serializers.ValidationError(
+        #             "Not valid node type for %s" % network_type
+        #         )
+        #     if node_type == FabricNodeType.Ca.name.lower() and ca is None:
+        #         raise serializers.ValidationError(
+        #             "Please input ca configuration for ca node"
+        #         )
+        #     elif (
+        #         node_type == FabricNodeType.Peer.name.lower() and peer is None
+        #     ):
+        #         raise serializers.ValidationError(
+        #             "Please input peer configuration for peer node"
+        #         )
+        #
+        # if agent_type is None and agent is None:
+        #     raise serializers.ValidationError("Please set agent_type or agent")
+        #
+        # if agent_type and agent:
+        #     if agent_type != agent.type:
+        #         raise serializers.ValidationError(
+        #             "agent type not equal to agent"
+        #         )
 
         return attrs
 

@@ -22,7 +22,7 @@ from api.exceptions import (
     NoResource,
     ResourceInUse,
 )
-from api.models import Agent, KubernetesConfig
+from api.models import Agent, KubernetesConfig, Organization
 from api.routes.agent.serializers import (
     AgentQuery,
     AgentListResponse,
@@ -39,6 +39,7 @@ LOG = logging.getLogger(__name__)
 
 
 class AgentViewSet(viewsets.ViewSet):
+    """Class represents agent related operations."""
     authentication_classes = (JSONWebTokenAuthentication,)
 
     def get_permissions(self):
@@ -62,7 +63,9 @@ class AgentViewSet(viewsets.ViewSet):
         """
         List Agents
 
-        Filter agents with query parameters.
+        :param request: query parameter
+        :return: agent list
+        :rtype: list
         """
         serializer = AgentQuery(data=request.GET)
         if serializer.is_valid(raise_exception=True):
@@ -74,40 +77,47 @@ class AgentViewSet(viewsets.ViewSet):
             organization = serializer.validated_data.get("organization")
 
             query_filters = {}
-            if organization:
-                if not request.user.is_operator:
-                    raise PermissionDenied()
-                query_filters.update({"organization": organization})
-            else:
-                org_name = (
-                    request.user.organization.name
-                    if request.user.organization
-                    else ""
-                )
-                if request.user.is_administrator:
-                    query_filters.update({"organization__name": org_name})
+            # if organization:
+            #     if not request.user.is_operator:
+            #         raise PermissionDenied()
+            #     query_filters.update({"organization": organization})
+            # else:
+            #     org_name = (
+            #         request.user.organization.name
+            #         if request.user.organization
+            #         else ""
+            #     )
+            #     if request.user.is_administrator:
+            #         query_filters.update({"organization__name": org_name})
             if name:
                 query_filters.update({"name__icontains": name})
             if agent_status:
                 query_filters.update({"status": agent_status})
             if agent_type:
                 query_filters.update({"type": agent_type})
+            if organization:
+                query_filters.update({"organization": organization})
 
             agents = Agent.objects.filter(**query_filters)
             p = Paginator(agents, per_page)
             agents = p.page(page)
             # agents = [agent.__dict__ for agent in agents]
             agent_list = []
-            for agent in agents:
-                agent_dict = agent.__dict__
-                agent_dict.update(
-                    {
-                        "config_file": request.build_absolute_uri(
-                            agent.config_file.url
-                        )
-                    }
-                )
-                agent_list.append(agent_dict)
+            # for agent in agents:
+            #     agent_dict = agent.__dict__
+            #     agent_list.append(agent_dict)
+            agent_list = [
+                {
+                    "id": agent.id,
+                    "name": agent.name,
+                    "status": agent.status,
+                    "type": agent.type,
+                    "urls": agent.urls,
+                    "organization": str(agent.organization.id) if agent.organization else None,
+                    "created_at": agent.created_at,
+                }
+                for agent in agents
+            ]
 
             response = AgentListResponse(
                 data={"data": agent_list, "total": p.count}
@@ -127,45 +137,41 @@ class AgentViewSet(viewsets.ViewSet):
         """
         Create Agent
 
-        Create new agent
+        :param request: create parameter
+        :return: agent ID
+        :rtype: uuid
         """
         serializer = AgentCreateBody(data=request.data)
         if serializer.is_valid(raise_exception=True):
             name = serializer.validated_data.get("name")
-            capacity = serializer.validated_data.get("capacity")
-            node_capacity = serializer.validated_data.get("node_capacity")
-            log_level = serializer.validated_data.get("log_level")
             agent_type = serializer.validated_data.get("type")
-            schedulable = serializer.validated_data.get("schedulable")
-            parameters = serializer.validated_data.get("parameters")
-            ip = serializer.validated_data.get("ip")
-            image = serializer.validated_data.get("image")
+            urls = serializer.validated_data.get("urls")
             config_file = serializer.validated_data.get("config_file")
+            organization = serializer.validated_data.get("organization")
 
             body = {
-                "capacity": capacity,
-                "node_capacity": node_capacity,
                 "type": agent_type,
-                "ip": ip,
-                "image": image,
+                "urls": urls,
+                "name": name,
             }
             if name:
                 agent_count = Agent.objects.filter(
-                    name=name, organization=request.user.organization
+                    name=name
                 ).count()
                 if agent_count > 0:
                     raise ResourceExists(
                         detail="Name %s already exists" % name
                     )
                 body.update({"name": name})
-            if schedulable is not None:
-                body.update({"schedulable": schedulable})
-            if log_level is not None:
-                body.update({"log_level": log_level})
-            if parameters is not None:
-                body.update({"parameters": parameters})
+
             if config_file is not None:
                 body.update({"config_file": config_file})
+            if organization is not None:
+                org = Organization.objects.get(id=organization)
+                if org.organization.all():
+                    raise ResourceExists
+                else:
+                    body.update({"organization": org})
 
             agent = Agent(**body)
             agent.save()
@@ -185,7 +191,10 @@ class AgentViewSet(viewsets.ViewSet):
         """
         Retrieve agent
 
-        Retrieve agent
+        :param request: destory parameter
+        :param pk: primary key
+        :return: none
+        :rtype: rest_framework.status
         """
         try:
             if request.user.is_operator:
@@ -219,7 +228,18 @@ class AgentViewSet(viewsets.ViewSet):
 
         Update special agent with id.
         """
-        pass
+        serializer = AgentUpdateBody(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            name = serializer.validated_data.get("name")
+            urls = serializer.validated_data.get("urls")
+            organization = serializer.validated_data.get("organization")
+            try:
+                Agent.objects.get(name=name)
+            except ObjectDoesNotExist:
+                pass
+            Agent.objects.filter(id=pk).update(name=name, urls=urls, organization=organization)
+
+            return Response(status=status.HTTP_202_ACCEPTED)
 
     @swagger_auto_schema(
         request_body=AgentPatchBody,

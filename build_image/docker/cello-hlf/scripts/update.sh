@@ -51,8 +51,12 @@ for name in HLF_NODE_MSP \
 	HLF_NODE_PEER_CONFIG \
 	HLF_NODE_ORDERER_CONFIG
 do
-    storeFile ${name} ${cfg_path}
+    if [ -z "{$name-}"]; then
+        storeFile $name $cfg_path
+    else
+        echo "$name is unset"
 done
+
 
 # Run optional cmd
 if [[ ! -z "${cmd}" ]]; then

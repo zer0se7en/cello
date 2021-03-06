@@ -3,6 +3,7 @@
 #
 import json
 import logging
+import base64
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.exceptions import PermissionDenied
@@ -17,12 +18,13 @@ from rest_framework.response import Response
 from rest_framework_jwt.authentication import JSONWebTokenAuthentication
 
 from api.auth import IsOperatorAuthenticated
-from api.common.enums import NodeStatus, AgentOperation
-from api.exceptions import CustomError, NoResource, ResourceExists
+from api.common.enums import NodeStatus, AgentOperation, Operation
+from api.exceptions import CustomError, NoResource, ResourceExists, ResourceInUse
 from api.exceptions import ResourceNotFound
 from api.models import (
     Agent,
     Node,
+    Organization,
     Port,
     FabricCA,
     FabricNodeType,
@@ -37,6 +39,7 @@ from api.routes.node.serializers import (
     NodeQuery,
     NodeCreateBody,
     NodeIDSerializer,
+    NodeCIDSerializer,
     NodeListSerializer,
     NodeUpdateBody,
     NodeFileCreateSerializer,
@@ -50,21 +53,26 @@ from api.routes.node.serializers import (
 from api.tasks import operate_node
 from api.utils.common import with_common_response
 from api.auth import CustomAuthenticate
+from api.lib.pki import CryptoGen, CryptoConfig
+from api.utils import zip_dir, zip_file
+from api.config import CELLO_HOME
+from api.utils.node_config import NodeConfig
+from api.lib.agent import AgentHandler
 
 LOG = logging.getLogger(__name__)
 
 
 class NodeViewSet(viewsets.ViewSet):
-    authentication_classes = (CustomAuthenticate, JSONWebTokenAuthentication)
+    #authentication_classes = (CustomAuthenticate, JSONWebTokenAuthentication)
 
     # Only operator can update node info
-    def get_permissions(self):
-        if self.action in ["update"]:
-            permission_classes = (IsAuthenticated, IsOperatorAuthenticated)
-        else:
-            permission_classes = (IsAuthenticated,)
-
-        return [permission() for permission in permission_classes]
+    # def get_permissions(self):
+    #     if self.action in ["update"]:
+    #         permission_classes = (IsAuthenticated, IsOperatorAuthenticated)
+    #     else:
+    #         permission_classes = (IsAuthenticated,)
+    #
+    #     return [permission() for permission in permission_classes]
 
     @staticmethod
     def _validate_organization(request):
@@ -79,9 +87,11 @@ class NodeViewSet(viewsets.ViewSet):
     )
     def list(self, request, *args, **kwargs):
         """
-        List Nodes
+        List node
 
-        Filter nodes with query parameters.
+        :param request: query parameter
+        :return: node list
+        :rtype: list
         """
         serializer = NodeQuery(data=request.GET)
         if serializer.is_valid(raise_exception=True):
@@ -89,28 +99,22 @@ class NodeViewSet(viewsets.ViewSet):
             per_page = serializer.validated_data.get("per_page")
             node_type = serializer.validated_data.get("type")
             name = serializer.validated_data.get("name")
-            network_type = serializer.validated_data.get("network_type")
-            network_version = serializer.validated_data.get("network_version")
             agent_id = serializer.validated_data.get("agent_id")
 
-            if agent_id is not None and not request.user.is_operator:
-                raise PermissionDenied
+            # if agent_id is not None and not request.user.is_operator:
+            #     raise PermissionDenied
             query_filter = {}
 
             if node_type:
                 query_filter.update({"type": node_type})
             if name:
                 query_filter.update({"name__icontains": name})
-            if network_type:
-                query_filter.update({"network_type": network_type})
-            if network_version:
-                query_filter.update({"network_version": network_version})
-            if request.user.is_administrator:
-                query_filter.update(
-                    {"organization": request.user.organization}
-                )
-            elif request.user.is_common_user:
-                query_filter.update({"user": request.user})
+            # if request.user.is_administrator:
+            #     query_filter.update(
+            #         {"organization": request.user.organization}
+            #     )
+            # elif request.user.is_common_user:
+            #     query_filter.update({"user": request.user})
             if agent_id:
                 query_filter.update({"agent__id": agent_id})
             nodes = Node.objects.filter(**query_filter)
@@ -254,85 +258,157 @@ class NodeViewSet(viewsets.ViewSet):
         """
         Create Node
 
-        Create node
+        :param request: create parameter
+        :return: node ID
+        :rtype: uuid
         """
         serializer = NodeCreateBody(data=request.data)
         if serializer.is_valid(raise_exception=True):
-            self._validate_organization(request)
-            agent_type = serializer.validated_data.get("agent_type")
-            network_type = serializer.validated_data.get("network_type")
-            network_version = serializer.validated_data.get("network_version")
-            agent = serializer.validated_data.get("agent")
-            node_type = serializer.validated_data.get("type")
-            ca = serializer.validated_data.get("ca")
-            peer = serializer.validated_data.get("peer")
-            if agent is None:
-                available_agents = (
-                    Agent.objects.annotate(network_num=Count("node__network"))
-                    .annotate(node_num=Count("node"))
-                    .filter(
-                        schedulable=True,
-                        type=agent_type,
-                        network_num__lt=F("capacity"),
-                        node_num__lt=F("node_capacity"),
-                        organization=request.user.organization,
-                    )
-                    .order_by("node_num")
-                )
-                if len(available_agents) > 0:
-                    agent = available_agents[0]
-                else:
-                    raise NoResource
-            else:
-                if not request.user.is_operator:
-                    raise PermissionDenied
-                node_count = Node.objects.filter(agent=agent).count()
-                if node_count >= agent.node_capacity or not agent.schedulable:
-                    raise NoResource
+            #self._validate_organization(request)
+            name = serializer.validated_data.get("name")
+            type = serializer.validated_data.get("type")
+            urls = serializer.validated_data.get("urls")
+            organization = serializer.validated_data.get("organization")
 
-            fabric_ca = None
-            fabric_peer = None
-            peer_ca_list = []
-            if node_type == FabricNodeType.Ca.name.lower():
-                fabric_ca = self._save_fabric_ca(request, ca)
-            elif node_type == FabricNodeType.Peer.name.lower():
-                fabric_peer, peer_ca_list = self._save_fabric_peer(
-                    request, peer
-                )
+            org = Organization.objects.get(id=organization)
+            if org:
+                pass
+            else:
+                raise NoResource
+            nodes = {
+                "type": type,
+                "Specs": [name]
+            }
+            CryptoConfig(org.name).update(nodes)
+            CryptoGen(org.name).extend()
+            self._generate_config(type, org.name, name, urls.split(":")[2])
+            msp, tls, cfg = self._conversion_msp_tls_cfg(type, org.name, name)
+
             node = Node(
-                network_type=network_type,
-                agent=agent,
-                network_version=network_version,
-                user=request.user,
-                organization=request.user.organization,
-                type=node_type,
-                ca=fabric_ca,
-                peer=fabric_peer,
+                name=name,
+                org=org,
+                urls=urls,
+                type=type,
+                msp=msp,
+                tls=tls,
+                config_file=cfg
             )
             node.save()
-            agent_config_file = request.build_absolute_uri(
-                agent.config_file.url
-            )
-            node_detail_url = reverse("node-detail", args=[str(node.id)])
-            node_detail_url = request.build_absolute_uri(node_detail_url)
-            node_file_upload_api = reverse("node-files", args=[str(node.id)])
-            node_file_upload_api = request.build_absolute_uri(
-                node_file_upload_api
-            )
-            operate_node.delay(
-                str(node.id),
-                AgentOperation.Create.value,
-                agent_config_file=agent_config_file,
-                node_detail_url=node_detail_url,
-                node_file_upload_api=node_file_upload_api,
-                peer_ca_list=json.dumps(peer_ca_list),
-            )
-            response = NodeIDSerializer({"id": str(node.id)})
-            return Response(response.data, status=status.HTTP_201_CREATED)
+
+            response = NodeIDSerializer(data=node.__dict__)
+            if response.is_valid(raise_exception=True):
+                return Response(
+                    response.validated_data, status=status.HTTP_201_CREATED
+                )
+
+    def _conversion_msp_tls_cfg(self, type, org, node):
+        """
+        msp and tls , cfg from zip file to byte
+
+        :param org: organization name
+        :param type: node type
+        :param node: node name
+        :return: msp, tls, cfg
+        :rtype: bytes
+        """
+        try:
+            if type == "peer":
+                dir_node = "{}/{}/crypto-config/peerOrganizations/{}/peers/{}/" \
+                    .format(CELLO_HOME, org, org, node + "." + org)
+                name = "core.yaml"
+                cname = "peer_config.zip"
+            else:
+                dir_node = "{}/{}/crypto-config/ordererOrganizations/{}/orderers/{}/" \
+                    .format(CELLO_HOME, org, org.split(".", 1)[1], node + "." + org.split(".", 1)[1])
+                name = "orderer.yaml"
+                cname = "orderer_config.zip"
+
+            zip_dir("{}msp".format(dir_node), "{}msp.zip".format(dir_node))
+            with open("{}msp.zip".format(dir_node), "rb") as f_msp:
+                msp = base64.b64encode(f_msp.read())
+
+            zip_dir("{}tls".format(dir_node), "{}tls.zip".format(dir_node))
+            with open("{}tls.zip".format(dir_node), "rb") as f_tls:
+                tls = base64.b64encode(f_tls.read())
+
+            zip_file("{}{}".format(dir_node, name), "{}{}".format(dir_node, cname))
+            with open("{}{}".format(dir_node, cname), "rb") as f_cfg:
+                cfg = base64.b64encode(f_cfg.read())
+        except Exception as e:
+            raise e
+
+        return msp, tls, cfg
+
+    def _generate_config(self, type, org, node, port):
+        """
+        generate config for node
+
+        :param org: organization name
+        :param type: node type
+        :param node: node name
+        :param port: node port(todo: automatic distribution port)
+        :return: none
+        :rtype: none
+        """
+        args = {}
+        if type == "peer":
+            args.update({"peer_id": "{}.{}".format(node, org)})
+            args.update({"peer_address": "{}.{}:{}".format(node, org, port)})
+            args.update({"peer_gossip_externalEndpoint": "{}.{}:{}".format(node, org, port)})
+            args.update({"peer_chaincodeAddress": "{}.{}:{}".format(node, org, port)})
+            args.update({"peer_tls_enabled": False})
+            args.update({"peer_localMspId": "{}MSP".format(org.capitalize())})
+
+            a = NodeConfig(org)
+            a.peer(node, **args)
+        else:
+            args.update({"General_ListenPort": port})
+            args.update({"General_LocalMSPID": "{}OrdererMSP".format(org.capitalize())})
+            args.update({"General_TLS_Enabled": True})
+            args.update({"General_BootstrapFile": "genesis.block"})
+
+            a = NodeConfig(org)
+            a.orderer(node, **args)
+        pass
+
+    def _agent_params(self, pk):
+        """
+        get node's params from db
+        :param node: node id
+        :return: info
+        """
+        try:
+            node = Node.objects.get(id=pk)
+            org = node.org
+            if org is None:
+                raise ResourceNotFound
+            network = org.network
+            if network is None:
+                raise ResourceNotFound
+            agent = org.agent.get()
+            if agent is None:
+                raise ResourceNotFound
+
+            info = {}
+
+            # get info of node, e.g, tls, msp, config.
+            info["status"] = node.status
+            info["msp"] = node.msp
+            info["tls"] = node.tls
+            info["config_file"] = node.config_file
+            info["type"] = node.type
+            info["name"] = node.name
+            info["bootstrap_block"] = network.genesisblock
+            info["urls"] = agent.urls
+            info["network_type"] = network.type
+            info["agent_type"] = agent.type
+            return info
+        except Exception as e:
+            raise e
 
     @swagger_auto_schema(
         methods=["post"],
-        query_serializer=NodeOperationSerializer,
+        request_body=NodeOperationSerializer,
         responses=with_common_response({status.HTTP_202_ACCEPTED: "Accepted"}),
     )
     @action(methods=["post"], detail=True, url_path="operations")
@@ -342,7 +418,48 @@ class NodeViewSet(viewsets.ViewSet):
 
         Do some operation on node, start/stop/restart
         """
-        pass
+        serializer = NodeOperationSerializer(data=request.data)
+        if serializer.is_valid(raise_exception=True):
+            action = serializer.validated_data.get("action")
+
+            if action == "start":
+                try:
+                    infos = self._agent_params(pk)
+
+                    agent = AgentHandler(infos)
+                    cid = agent.create(infos)
+                    if cid:
+                        Node.objects.filter(id=pk).update(cid=cid)
+                        response = NodeCIDSerializer(data={"id": cid})
+                        if response.is_valid(raise_exception=True):
+                            return Response(
+                                response.validated_data, status=status.HTTP_201_CREATED
+                            )
+                    else:
+                        raise ResourceNotFound
+                except Exception as e:
+                    raise e
+                if infos.get("status") == "running" or infos.get("status") == "deleting" or infos.get("status") == "deploying":
+                    raise ResourceInUse
+                elif infos.get("status") == "":
+
+                    pass
+                elif infos.get("status") == "stopped" or infos.get("status") == "deleted":
+                    pass
+                elif infos.get("status") == "error":
+                    pass
+                else:
+                    pass
+
+            elif action == "stop":
+                #todo
+                pass
+            elif action == "restart":
+                # todo
+                pass
+            else:
+                # todo
+                pass
 
     @swagger_auto_schema(
         responses=with_common_response(
@@ -353,43 +470,19 @@ class NodeViewSet(viewsets.ViewSet):
         """
         Delete Node
 
-        Delete node
+        :param request: destory parameter
+        :param pk: primary key
+        :return: none
+        :rtype: rest_framework.status
         """
         try:
-            if request.user.is_superuser:
-                node = Node.objects.get(id=pk)
-            else:
-                node = Node.objects.get(
-                    id=pk, organization=request.user.organization
-                )
+            node = Node.objects.get(id=pk)
+            node.delete()
+            # todo delete node from agent
         except ObjectDoesNotExist:
             raise ResourceNotFound
-        else:
-            if node.status != NodeStatus.Deleting.name.lower():
-                if node.status not in [
-                    NodeStatus.Error.name.lower(),
-                    NodeStatus.Deleted.name.lower(),
-                ]:
-                    node.status = NodeStatus.Deleting.name.lower()
-                    node.save()
 
-                    agent_config_file = request.build_absolute_uri(
-                        node.agent.config_file.url
-                    )
-                    node_detail_url = reverse("node-detail", args=[pk])
-                    node_detail_url = request.build_absolute_uri(
-                        node_detail_url
-                    )
-                    operate_node.delay(
-                        str(node.id),
-                        AgentOperation.Delete.value,
-                        agent_config_file=agent_config_file,
-                        node_detail_url=node_detail_url,
-                    )
-                else:
-                    node.delete()
-
-            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @swagger_auto_schema(
         operation_id="update node",
