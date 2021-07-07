@@ -1,6 +1,7 @@
 import Mock from 'mockjs';
 import faker from 'faker';
 import paginator from 'cello-paginator';
+import organizations from './organization';
 
 const users = Mock.mock({
   'data|11': [
@@ -67,8 +68,8 @@ function tokenVerify(req, res) {
   }
 }
 export default {
-  'POST /api/token-verify': tokenVerify,
-  '/api/users': (req, res) => {
+  'POST /api/v1/token-verify': tokenVerify,
+  '/api/v1/users': (req, res) => {
     const { page = 1, per_page: perPage = 10 } = req.query;
     const result = paginator(users.data, parseInt(page, 10), parseInt(perPage, 10));
     res.send({
@@ -76,7 +77,7 @@ export default {
       data: result.data,
     });
   },
-  'POST /api/auth': (req, res) => {
+  'POST /api/v1/auth': (req, res) => {
     const { password, username, type } = req.body;
     if (password === 'pass' && username === 'admin') {
       res.send({
@@ -123,7 +124,48 @@ export default {
       currentAuthority: 'guest',
     });
   },
-  'GET /api/500': (req, res) => {
+  'POST /api/v1/register': (req, res) => {
+    const { username, orgName } = req.body;
+    if (!username || username === '') {
+      res.send({
+        success: false,
+        message: 'username is necessary!'
+      });
+      return;
+    }
+    if (!orgName || orgName === '') {
+      res.send({
+        success: false,
+        message: 'orgName is necessary!'
+      });
+      return;
+    }
+    let success = true;
+    let message = '';
+    organizations.organizations.data.forEach(function(value){
+      if (value.name === orgName) {
+        success = false;
+        message = 'The org is exist!';
+      }
+    });
+    if (!success) {
+      res.send({
+        success,
+        message
+      });
+      return;
+    }
+    organizations.organizations.data.push({
+      id: Mock.Random.guid(),
+      name: orgName,
+      created_at: Date.now()
+    });
+    res.send({
+      success: true,
+      message: 'register success!'
+    });
+  },
+  'GET /api/v1/500': (req, res) => {
     res.status(500).send({
       timestamp: 1513932555104,
       status: 500,
@@ -132,7 +174,7 @@ export default {
       path: '/base/category/list',
     });
   },
-  'GET /api/404': (req, res) => {
+  'GET /api/v1/404': (req, res) => {
     res.status(404).send({
       timestamp: 1513932643431,
       status: 404,
@@ -141,7 +183,7 @@ export default {
       path: '/base/category/list/2121212',
     });
   },
-  'GET /api/403': (req, res) => {
+  'GET /api/v1/403': (req, res) => {
     res.status(403).send({
       timestamp: 1513932555104,
       status: 403,
@@ -150,7 +192,7 @@ export default {
       path: '/base/category/list',
     });
   },
-  'GET /api/401': (req, res) => {
+  'GET /api/v1/401': (req, res) => {
     res.status(401).send({
       timestamp: 1513932555104,
       status: 401,

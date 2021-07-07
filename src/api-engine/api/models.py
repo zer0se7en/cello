@@ -105,13 +105,18 @@ class UserProfile(AbstractUser):
         default=make_uuid,
         editable=True,
     )
+    username = models.CharField(
+        default="",
+        max_length=64,
+        help_text="Name of user"
+    )
     role = models.CharField(
         choices=UserRole.to_choices(True),
         default=UserRole.User.value,
         max_length=64,
     )
     organization = models.ForeignKey(
-        Organization, null=True, on_delete=models.CASCADE
+        Organization, null=True, on_delete=models.CASCADE, related_name="users",
     )
 
     class Meta:
@@ -194,6 +199,16 @@ class Agent(models.Model):
     )
     created_at = models.DateTimeField(
         help_text="Create time of agent", auto_now_add=True
+    )
+
+    # free_port = models.IntegerField(
+    #     help_text="Agent free port.",
+    #     default=30000,
+    # )
+    free_ports = ArrayField(
+        models.IntegerField(blank=True),
+        help_text="Agent free ports.",
+        null=True
     )
 
     def delete(self, using=None, keep_parents=False):
@@ -314,6 +329,9 @@ class Network(models.Model):
     genesisblock = models.TextField(
         help_text="genesis block",
         null=True,
+    )
+    database = models.CharField(
+       help_text="database of network", max_length=128, default="leveldb",
     )
 
     class Meta:
@@ -487,13 +505,13 @@ class Node(models.Model):
         related_name="org",
         on_delete=models.CASCADE,
     )
-    # agent = models.ForeignKey(
-    #     Agent,
-    #     help_text="Agent of node",
-    #     null=True,
-    #     related_name="network",
-    #     on_delete=models.CASCADE
-    # )
+    agent = models.ForeignKey(
+        Agent,
+        help_text="Agent of node",
+        null=True,
+        related_name="agent",
+        on_delete=models.CASCADE
+    )
     # network = models.ForeignKey(
     #     Network,
     #     help_text="Network which node joined.",
@@ -600,7 +618,7 @@ class NodeUser(models.Model):
 
 class Port(models.Model):
     node = models.ForeignKey(
-        Node, help_text="Node of port", on_delete=models.CASCADE, null=True
+        Node, help_text="Node of port", on_delete=models.CASCADE, null=True, related_name="port",
     )
     external = models.IntegerField(
         help_text="External port",
